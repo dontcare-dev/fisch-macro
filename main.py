@@ -196,6 +196,7 @@ class StatCard(QFrame):
         lay.addWidget(val)
 
 class MainWindow(QMainWindow):
+    hotkey_signal = Signal()
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Fish Macro")
@@ -207,6 +208,7 @@ class MainWindow(QMainWindow):
         self.catalog_worker = None
         self.image_worker = None
         self.current_image_name = ""
+        self.hotkey_signal.connect(self.toggle_macro)
         self.build_ui()
         self.apply_style()
         self.refresh_rod_table()
@@ -637,7 +639,7 @@ class MainWindow(QMainWindow):
             import keyboard
             if hasattr(self,"hotkey_handle") and self.hotkey_handle:
                 keyboard.remove_hotkey(self.hotkey_handle)
-            self.hotkey_handle = keyboard.add_hotkey(self.settings.get("hotkey","f12"),lambda: self.toggle_macro())
+            self.hotkey_handle = keyboard.add_hotkey(self.settings.get("hotkey","f12"),lambda: self.hotkey_signal.emit())
         except Exception as exc:
             self.activity.setText(f"Hotkey unavailable: {exc}")
 
