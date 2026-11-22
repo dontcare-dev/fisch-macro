@@ -17,7 +17,7 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 RODS_FILE = APP_DIR / "rods.json"
 TEMPLATE_FILE = APP_DIR / "bite_template.png"
 FISH_TEMPLATE_FILE = APP_DIR / "fish_marker_template.png"
-CATALOG_URL = "https://fisch.wiki/wiki/fishing-rods/"
+CATALOG_URL = "https://oofwiki.com/fisch/rods"
 WIKI_API = "https://fisch.wiki/api.php"
 
 DEFAULT_SETTINGS = {
@@ -40,7 +40,8 @@ SEED_RODS = [
     {"name":"Destiny Rod","area":"The Arch","luck":"250%","lure":"45%","control":"0.2","resilience":"10%","max_weight":"177,777 kg","obtainable":True},
     {"name":"Rod Of The Depths","area":"The Depths","luck":"130%","lure":"75%","control":"0.15","resilience":"10%","max_weight":"30,000 kg","obtainable":True},
     {"name":"Fangsplitter","area":"Underground Music Venue","luck":"222%","lure":"222%","control":"0.22","resilience":"22%","max_weight":"∞","obtainable":True},
-    {"name":"Hammyshork","area":"Ocean","luck":"170%","lure":"70%","control":"0.15","resilience":"15%","max_weight":"∞","obtainable":True}
+    {"name":"Hammyshork","area":"Ocean","luck":"170%","lure":"70%","control":"0.15","resilience":"15%","max_weight":"∞","obtainable":True},
+    {"name":"Seraphic Rod","area":"Level 1,000","luck":"+225%","lure":"0%","control":"0.25","resilience":"+20%","max_weight":"Unlimited","price":"No Price","ability":"Blessed (35%, 8.5×); Heavenly (10%, 6×)","source":"Rowikis","aliases":"Seraphic Lord"}
 ]
 
 def read_json(path, fallback):
@@ -520,20 +521,18 @@ class MainWindow(QMainWindow):
         cf = QFormLayout(coords)
         self.cast_x = self.spin(0,10000,self.settings["cast_x"])
         self.cast_y = self.spin(0,10000,self.settings["cast_y"])
-        self.rx = self.spin(0,10000,self.settings["region_x"])
-        self.ry = self.spin(0,10000,self.settings["region_y"])
-        self.rw = self.spin(1,10000,self.settings["region_w"])
-        self.rh = self.spin(1,10000,self.settings["region_h"])
-        cf.addRow("Cast click X",self.cast_x); cf.addRow("Cast click Y",self.cast_y)
-        cf.addRow("Bite scan region X",self.rx); cf.addRow("Bite scan region Y",self.ry)
-        cf.addRow("Bite scan width",self.rw); cf.addRow("Bite scan height",self.rh)
+        cf.addRow("Cast point X",self.cast_x); cf.addRow("Cast point Y",self.cast_y)
+        cast_note = QLabel("Set one safe point over the water. Casting uses this fixed point; no movement is recorded or replayed.")
+        cast_note.setObjectName("muted")
+        cast_note.setWordWrap(True)
+        cf.addRow(cast_note)
         outer.addWidget(coords)
         timing = QGroupBox("Detection and timing")
         tf = QFormLayout(timing)
         self.scan_interval = QDoubleSpinBox(); self.scan_interval.setRange(0.035,2); self.scan_interval.setSingleStep(0.01); self.scan_interval.setValue(float(self.settings["scan_interval"]))
         self.cast_hold_input = QDoubleSpinBox(); self.cast_hold_input.setRange(0.25,3.0); self.cast_hold_input.setSingleStep(0.05); self.cast_hold_input.setValue(float(self.settings.get("cast_hold",0.95)))
         self.recast_delay = QDoubleSpinBox(); self.recast_delay.setRange(0.2,30); self.recast_delay.setSingleStep(0.2); self.recast_delay.setValue(float(self.settings["recast_delay"]))
-        self.auto_recast = QCheckBox("Automatically cast again after a detected prompt"); self.auto_recast.setChecked(bool(self.settings["auto_recast"]))
+        self.auto_recast = QCheckBox("Automatically cast again after each catch"); self.auto_recast.setChecked(bool(self.settings["auto_recast"]))
         tf.addRow("Screen scan interval (s)",self.scan_interval)
         tf.addRow("Cast hold duration (s)",self.cast_hold_input)
         tf.addRow("Recast delay (s)",self.recast_delay)
@@ -765,6 +764,10 @@ class MainWindow(QMainWindow):
             self.rods = rods
             save_json(RODS_FILE,self.rods)
             self.refresh_rod_table()
+            selected = self.settings.get("selected_rod","Seraphic Rod")
+            if not any(r.get("name")==selected for r in self.rods):
+                selected = "Seraphic Rod" if any(r.get("name")=="Seraphic Rod" for r in self.rods) else self.rods[0]["name"]
+            self.select_rod(selected)
             self.activity.setText(message)
         else:
             self.activity.setText(message)
