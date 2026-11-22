@@ -819,7 +819,9 @@ class MainWindow(QMainWindow):
         self.detail_stats.setText(
             f"Lure speed: {rod.get('lure','—')}\\nLuck: {rod.get('luck','—')}\\n"
             f"Control: {rod.get('control','—')}\\nResilience: {rod.get('resilience','—')}\\n"
-            f"Max weight: {rod.get('max_weight','—')}"
+            f"Max weight: {rod.get('max_weight','—')}\\nPrice: {rod.get('price','—')}\\n"
+            f"Ability: {rod.get('ability','—')}\\n"
+            "Luck is a modifier, not a fixed catch percentage. Actual fish odds depend on the fish pool, location, bait, weather and other effects."
         )
         self.detail_source.setText(rod.get("source",""))
         self.dashboard_rod_name.setText(rod.get("name",""))
