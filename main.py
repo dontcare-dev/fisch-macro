@@ -23,7 +23,7 @@ WIKI_API = "https://fischipedia.org/api.php"
 DEFAULT_SETTINGS = {
     "hotkey": "f12", "cast_x": 0, "cast_y": 0, "bite_x": 0, "bite_y": 0,
     "region_x": 0, "region_y": 0, "region_w": 900, "region_h": 600,
-    "scan_interval": 0.12, "bite_threshold": 0.82, "reel_click_ms": 120,
+    "scan_interval": 0.06, "bite_threshold": 0.82, "reel_click_ms": 120,
     "recast_delay": 1.4, "selected_rod": "Flimsy Rod", "auto_recast": True
 }
 SEED_RODS = [
@@ -605,7 +605,7 @@ class MainWindow(QMainWindow):
         outer.addWidget(coords)
         timing = QGroupBox("Detection and timing")
         tf = QFormLayout(timing)
-        self.scan_interval = QDoubleSpinBox(); self.scan_interval.setRange(0.05,2); self.scan_interval.setSingleStep(0.05); self.scan_interval.setValue(float(self.settings["scan_interval"]))
+        self.scan_interval = QDoubleSpinBox(); self.scan_interval.setRange(0.035,2); self.scan_interval.setSingleStep(0.01); self.scan_interval.setValue(float(self.settings["scan_interval"]))
         self.threshold = QDoubleSpinBox(); self.threshold.setRange(0.5,0.99); self.threshold.setSingleStep(0.01); self.threshold.setValue(float(self.settings["bite_threshold"]))
         self.reel_ms = self.spin(50,2000,self.settings["reel_click_ms"])
         self.recast_delay = QDoubleSpinBox(); self.recast_delay.setRange(0.2,30); self.recast_delay.setSingleStep(0.2); self.recast_delay.setValue(float(self.settings["recast_delay"]))
