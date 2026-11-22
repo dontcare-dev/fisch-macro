@@ -16,6 +16,7 @@ APP_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = APP_DIR / "settings.json"
 RODS_FILE = APP_DIR / "rods.json"
 TEMPLATE_FILE = APP_DIR / "bite_template.png"
+FISH_TEMPLATE_FILE = APP_DIR / "fish_marker_template.png"
 CATALOG_URL = "https://bloxguidesgg.com/games/fisch/wiki/rods"
 WIKI_API = "https://fischipedia.org/api.php"
 
@@ -120,68 +121,200 @@ class ImageWorker(QThread):
 class FishingWorker(QThread):
     status = Signal(str)
     stopped = Signal()
+
     def __init__(self, settings):
         super().__init__()
         self.settings = settings
         self.running = True
+
     def stop(self):
         self.running = False
+
+    def _match(self, gray, template, cv2):
+        th, tw = template.shape[:2]
+        if gray.shape[0] < th or gray.shape[1] < tw:
+            return None
+        result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+        _, score, _, location = cv2.minMaxLoc(result)
+        if score < float(self.settings.get("bite_threshold", 0.78)):
+            return None
+        return (location[0] + tw // 2, location[1] + th // 2, float(score))
+
+    def _slider_center(self, frame, fish_y, cv2, np):
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+        _, mask = cv2.threshold(gray, 205, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        candidates = []
+        height, width = gray.shape
+        for contour in contours:
+            x, y, w, h = cv2.boundingRect(contour)
+            ratio = w / max(1, h)
+            if 18 <= w <= width * 0.72 and 5 <= h <= min(55, height * 0.12) and ratio >= 2.8:
+                center_y = y + h // 2
+                if abs(center_y - fish_y) <= max(35, h * 2):
+                    candidates.append((cv2.contourArea(contour), x + w // 2, w))
+        if not candidates:
+            return None
+        candidates.sort(reverse=True)
+        _, center, bar_width = candidates[0]
+        return center, bar_width
+
     def run(self):
+        import pyautogui
+        import cv2
+        import numpy as np
+        import mss
+
+        mouse_held = False
         try:
-            import pyautogui
-            import cv2
-            import numpy as np
-            import mss
             if not TEMPLATE_FILE.exists():
-                self.status.emit("Capture a bite prompt template before starting.")
-                self.stopped.emit()
+                self.status.emit("Capture the SHAKE prompt template first.")
                 return
-            template = cv2.imread(str(TEMPLATE_FILE), cv2.IMREAD_GRAYSCALE)
-            if template is None:
-                self.status.emit("Bite template could not be read.")
-                self.stopped.emit()
+            if not FISH_TEMPLATE_FILE.exists():
+                self.status.emit("Capture the moving fish marker template first.")
                 return
-            h, w = template.shape[:2]
+            bite_template = cv2.imread(str(TEMPLATE_FILE), cv2.IMREAD_GRAYSCALE)
+            fish_template = cv2.imread(str(FISH_TEMPLATE_FILE), cv2.IMREAD_GRAYSCALE)
+            if bite_template is None or fish_template is None:
+                self.status.emit("A visual template is invalid. Recapture both templates.")
+                return
+
             region = {
-                "left": int(self.settings["region_x"]), "top": int(self.settings["region_y"]),
-                "width": max(1, int(self.settings["region_w"])), "height": max(1, int(self.settings["region_h"]))
+                "left": int(self.settings["region_x"]),
+                "top": int(self.settings["region_y"]),
+                "width": max(1, int(self.settings["region_w"])),
+                "height": max(1, int(self.settings["region_h"]))
             }
-            cast_x, cast_y = int(self.settings["cast_x"]), int(self.settings["cast_y"])
+            if bite_template.shape[0] >= region["height"] or bite_template.shape[1] >= region["width"]:
+                self.status.emit("The SHAKE template is too large. Recapture it using the crop selector.")
+                return
+            if fish_template.shape[0] >= region["height"] or fish_template.shape[1] >= region["width"]:
+                self.status.emit("The fish marker template is too large. Recapture it using the crop selector.")
+                return
+
+            cast_x = int(self.settings["cast_x"])
+            cast_y = int(self.settings["cast_y"])
             if cast_x <= 0 or cast_y <= 0:
                 self.status.emit("Set the cast click position in Settings first.")
-                self.stopped.emit()
                 return
-            self.status.emit("Fishing automation running. Press the hotkey again or Stop to pause.")
+
+            scan_delay = max(0.035, float(self.settings.get("scan_interval", 0.08)))
+            threshold = float(self.settings.get("bite_threshold", 0.78))
+            self.status.emit("Automation running: cast → detect SHAKE → track fish → steer reel bar.")
             with mss.mss() as sct:
                 while self.running:
-                    pyautogui.click(cast_x, cast_y)
-                    self.status.emit("Cast sent. Waiting for the visual bite prompt…")
-                    found = False
-                    while self.running and not found:
+                    pyautogui.mouseUp()
+                    mouse_held = False
+                    pyautogui.moveTo(cast_x, cast_y)
+                    pyautogui.mouseDown()
+                    time.sleep(0.55)
+                    pyautogui.mouseUp()
+                    self.status.emit("Cast sent. Scanning for the moving SHAKE prompt…")
+
+                    shake_time = time.monotonic()
+                    reel_started = False
+                    last_shake = 0.0
+                    while self.running and time.monotonic() - shake_time < 90:
                         frame = np.array(sct.grab(region))
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        if gray.shape[0] >= h and gray.shape[1] >= w:
-                            result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
-                            _, score, _, location = cv2.minMaxLoc(result)
-                            if score >= float(self.settings["bite_threshold"]):
-                                found = True
-                                bx = region["left"] + location[0] + w // 2
-                                by = region["top"] + location[1] + h // 2
-                                pyautogui.click(bx, by)
-                                self.status.emit(f"Bite prompt detected ({score:.2f}). Click sent.")
-                                time.sleep(max(0.05, int(self.settings["reel_click_ms"]) / 1000))
-                                if self.settings.get("auto_recast", True):
-                                    time.sleep(float(self.settings["recast_delay"]))
-                                    break
-                                self.running = False
+                        fish_hit = self._match(gray, fish_template, cv2)
+                        if fish_hit:
+                            reel_started = True
+                            break
+                        bite_hit = self._match(gray, bite_template, cv2)
+                        if bite_hit and time.monotonic() - last_shake > 0.35:
+                            bx = region["left"] + bite_hit[0]
+                            by = region["top"] + bite_hit[1]
+                            pyautogui.click(bx, by)
+                            last_shake = time.monotonic()
+                            self.status.emit(f"SHAKE prompt detected ({bite_hit[2]:.2f}); clicked.")
+                        time.sleep(scan_delay)
+
+                    if not self.running:
+                        break
+                    if not reel_started:
+                        self.status.emit("No reel minigame detected this cast. Stopping safely.")
+                        break
+
+                    self.status.emit("Fish detected. Adaptive reel tracking active.")
+                    previous_x = None
+                    previous_t = time.monotonic()
+                    filtered_velocity = 0.0
+                    missing_since = None
+                    last_report = 0.0
+                    while self.running:
+                        now = time.monotonic()
+                        frame = np.array(sct.grab(region))
+                        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
+                        fish_hit = self._match(gray, fish_template, cv2)
+                        if fish_hit is None:
+                            if missing_since is None:
+                                missing_since = now
+                            if now - missing_since >= 1.8:
                                 break
-                        time.sleep(float(self.settings["scan_interval"]))
+                            time.sleep(scan_delay)
+                            continue
+
+                        missing_since = None
+                        fish_x, fish_y, score = fish_hit
+                        slider = self._slider_center(frame, fish_y, cv2, np)
+                        if slider is None:
+                            if mouse_held:
+                                pyautogui.mouseUp()
+                                mouse_held = False
+                            self.status.emit("Fish visible; locating the white reel slider…")
+                            time.sleep(scan_delay)
+                            continue
+
+                        slider_x, slider_width = slider
+                        dt = max(0.02, now - previous_t)
+                        if previous_x is not None:
+                            instant_velocity = (fish_x - previous_x) / dt
+                            instant_velocity = max(-900.0, min(900.0, instant_velocity))
+                            filtered_velocity = 0.65 * filtered_velocity + 0.35 * instant_velocity
+                        previous_x = fish_x
+                        previous_t = now
+
+                        predicted_x = fish_x + max(-45.0, min(45.0, filtered_velocity * 0.13))
+                        deadband = max(5.0, slider_width * 0.16)
+                        error = predicted_x - slider_x
+                        if error > deadband and not mouse_held:
+                            pyautogui.mouseDown()
+                            mouse_held = True
+                        elif error < -deadband and mouse_held:
+                            pyautogui.mouseUp()
+                            mouse_held = False
+
+                        if now - last_report > 0.6:
+                            direction = "HOLD →" if mouse_held else "RELEASE ←"
+                            self.status.emit(
+                                f"Tracking fish ({score:.2f}) · {direction} · offset {int(error)} px"
+                            )
+                            last_report = now
+                        time.sleep(scan_delay)
+
+                    if mouse_held:
+                        pyautogui.mouseUp()
+                        mouse_held = False
+                    if not self.running:
+                        break
+                    self.status.emit("Reel marker disappeared. Waiting for the catch screen…")
+                    time.sleep(float(self.settings.get("recast_delay", 1.4)))
                     if not self.settings.get("auto_recast", True):
                         break
+
             self.status.emit("Automation stopped.")
         except Exception as exc:
             self.status.emit(f"Automation error: {exc}")
-        self.stopped.emit()
+        finally:
+            try:
+                pyautogui.mouseUp()
+            except Exception:
+                pass
+            self.stopped.emit()
+
 
 class StatCard(QFrame):
     def __init__(self, label, value):
@@ -433,13 +566,16 @@ class MainWindow(QMainWindow):
         tf.addRow("Recast delay (s)",self.recast_delay)
         tf.addRow(self.auto_recast)
         outer.addWidget(timing)
-        template = QGroupBox("Visual bite prompt")
+        template = QGroupBox("Visual fishing markers")
         tl = QVBoxLayout(template)
-        self.template_status = QLabel("Template not captured" if not TEMPLATE_FILE.exists() else "Template saved")
-        self.capture_template_btn = QPushButton("Capture bite prompt from current screen")
-        self.capture_template_btn.clicked.connect(self.capture_template)
+        self.template_status = QLabel("SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") + " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured"))
+        self.capture_template_btn = QPushButton("Capture SHAKE prompt")
+        self.capture_template_btn.clicked.connect(lambda: self.capture_template("bite"))
+        self.capture_fish_btn = QPushButton("Capture moving fish marker")
+        self.capture_fish_btn.clicked.connect(lambda: self.capture_template("fish"))
         tl.addWidget(self.template_status)
         tl.addWidget(self.capture_template_btn)
+        tl.addWidget(self.capture_fish_btn)
         outer.addWidget(template)
         save = QPushButton("Save settings")
         save.clicked.connect(self.save_settings)
@@ -599,26 +735,46 @@ class MainWindow(QMainWindow):
             self.activity.setText(message)
             QMessageBox.information(self,"Catalog update",message)
 
-    def capture_template(self):
+    def capture_template(self, kind="bite"):
         try:
             import pyautogui
-            x,y,w,h = self.rx.value(),self.ry.value(),self.rw.value(),self.rh.value()
-            if w < 12 or h < 12:
-                raise ValueError("The scan region is too small.")
-            QMessageBox.information(self,"Capture bite prompt","Move the game to the bite prompt, then press OK. The configured scan region will be captured.")
-            shot = pyautogui.screenshot(region=(x,y,w,h))
-            path,_ = QFileDialog.getSaveFileName(self,"Save bite prompt crop",str(TEMPLATE_FILE),"PNG image (*.png)")
-            if not path: return
-            shot.save(path)
             import cv2
             import numpy as np
-            img = cv2.imread(path,cv2.IMREAD_GRAYSCALE)
-            if img is None: raise ValueError("Could not read captured image.")
-            # Use the captured region as the initial visual template.
-            cv2.imwrite(str(TEMPLATE_FILE),img)
-            self.template_status.setText(f"Template saved: {TEMPLATE_FILE.name}")
+            x, y = self.rx.value(), self.ry.value()
+            w, h = self.rw.value(), self.rh.value()
+            if w < 40 or h < 40:
+                raise ValueError("The scan region is too small.")
+            label = "SHAKE prompt" if kind == "bite" else "moving fish marker"
+            QMessageBox.information(
+                self, "Capture " + label,
+                "Put Fisch on the screen with the " + label + " clearly visible. "
+                "After closing this message, switch to the game within 3 seconds. "
+                "A crop selector will open; drag a tight box around only the " + label + "."
+            )
+            time.sleep(3)
+            shot = pyautogui.screenshot(region=(x, y, w, h))
+            frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
+            roi = cv2.selectROI("Select " + label, frame, showCrosshair=True, fromCenter=False)
+            cv2.destroyAllWindows()
+            rx, ry, rw, rh = [int(v) for v in roi]
+            if rw < 5 or rh < 5:
+                return
+            crop = cv2.cvtColor(frame[ry:ry+rh, rx:rx+rw], cv2.COLOR_BGR2GRAY)
+            target = TEMPLATE_FILE if kind == "bite" else FISH_TEMPLATE_FILE
+            if not cv2.imwrite(str(target), crop):
+                raise ValueError("Could not save the selected marker.")
+            self.template_status.setText(
+                "SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") +
+                " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured")
+            )
+            self.activity.setText(label.capitalize() + " template captured.")
         except Exception as exc:
-            QMessageBox.warning(self,"Capture failed",str(exc))
+            try:
+                import cv2
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+            QMessageBox.warning(self, "Capture failed", str(exc))
 
     def save_settings(self):
         self.settings.update({
@@ -690,7 +846,7 @@ class MainWindow(QMainWindow):
         save_json(SETTINGS_FILE,self.settings)
 
     def refresh_status(self):
-        self.template_status.setText("Template saved" if TEMPLATE_FILE.exists() else "Template not captured")
+        self.template_status.setText("SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") + " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured"))
 
     def closeEvent(self,event):
         self.stop_macro()
