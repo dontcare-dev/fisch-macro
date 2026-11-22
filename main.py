@@ -227,6 +227,17 @@ class FishingWorker(QThread):
                         self.status.emit("Waiting for Roblox focus. Use F12 while the game is active.")
                         time.sleep(.25)
                     if not self.running:break
+                    if self.settings.get("auto_totem",False) and time.monotonic() >= next_totem_at:
+                        totem_key=str(self.settings.get("totem_key","")).strip()
+                        rod_key=str(self.settings.get("rod_key","")).strip()
+                        if totem_key:
+                            pyautogui.press(totem_key)
+                            time.sleep(.25)
+                            pyautogui.click(cx,cy)
+                            time.sleep(.3)
+                            if rod_key:
+                                pyautogui.press(rod_key)
+                        next_totem_at=time.monotonic()+max(30,int(self.settings.get("totem_interval",300)))
                     pyautogui.moveTo(cx,cy);pyautogui.mouseDown();time.sleep(cast_hold);pyautogui.mouseUp()
                     self.status.emit("Cast sent. Waiting for the reel UI…")
                     started=time.monotonic();reel=None
