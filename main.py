@@ -17,14 +17,15 @@ SETTINGS_FILE = APP_DIR / "settings.json"
 RODS_FILE = APP_DIR / "rods.json"
 TEMPLATE_FILE = APP_DIR / "bite_template.png"
 FISH_TEMPLATE_FILE = APP_DIR / "fish_marker_template.png"
-CATALOG_URL = "https://bloxguidesgg.com/games/fisch/wiki/rods"
-WIKI_API = "https://fischipedia.org/api.php"
+CATALOG_URL = "https://fisch.wiki/wiki/fishing-rods/"
+WIKI_API = "https://fisch.wiki/api.php"
 
 DEFAULT_SETTINGS = {
     "hotkey": "f12", "cast_x": 0, "cast_y": 0, "bite_x": 0, "bite_y": 0,
     "region_x": 0, "region_y": 0, "region_w": 900, "region_h": 600,
     "scan_interval": 0.06, "bite_threshold": 0.82, "reel_click_ms": 120,
-    "recast_delay": 1.4, "selected_rod": "Flimsy Rod", "auto_recast": True
+    "recast_delay": 1.4, "selected_rod": "Flimsy Rod", "auto_recast": True,
+    "auto_totem": False, "totem_name": "Sundial Totem", "totem_key": "3", "rod_key": "1", "totem_interval": 300
 }
 SEED_RODS = [
     {"name":"Flimsy Rod","area":"Moosewood","luck":"0%","lure":"0%","control":"0","resilience":"0%","max_weight":"10.4 kg","obtainable":True},
@@ -57,41 +58,62 @@ class CatalogWorker(QThread):
         try:
             import requests
             from bs4 import BeautifulSoup
-            response = requests.get(CATALOG_URL, timeout=18, headers={"User-Agent":"FishMacro/1.0"})
+            response = requests.get(CATALOG_URL, timeout=25, headers={"User-Agent":"FishMacro/2.0"})
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            table = None
-            for candidate in soup.find_all("table"):
-                headers = " ".join(th.get_text(" ", strip=True).lower() for th in candidate.find_all("th"))
-                if "luck" in headers and "lure" in headers and "rod" in headers:
-                    table = candidate
-                    break
-            if table is None:
-                raise RuntimeError("Rod table was not found on the catalog page.")
-            rods = []
-            for tr in table.find_all("tr"):
-                cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
-                if len(cells) < 10 or cells[1].lower() in ("rod","name"):
+            rods = {}
+            aliases = {
+                "lure speed": "lure", "lure speed (%)": "lure",
+                "luck": "luck", "luck (%)": "luck",
+                "control": "control", "resilience": "resilience",
+                "resilience (%)": "resilience", "max kg": "max_weight",
+                "max kg (kg)": "max_weight", "max weight": "max_weight",
+                "price": "price", "cost": "price", "ability": "ability",
+                "location": "area", "area": "area", "stage": "stage",
+                "version": "version", "source": "source"
+            }
+            for table in soup.find_all("table"):
+                rows = []
+                for tr in table.find_all("tr"):
+                    cells = [re.sub(r"\\s+", " ", c.get_text(" ", strip=True)).strip() for c in tr.find_all(["th","td"])]
+                    if cells:
+                        rows.append(cells)
+                if len(rows) < 3:
                     continue
-                name = re.sub(r"\s+", " ", cells[0]).strip()
-                if not name or name.lower() in ("own / compare", "rod"):
-                    continue
-                # The catalog table columns are name, location, luck, lure, control, resilience, max weight, stage, version, source, obtainable.
-                if len(cells) >= 10:
-                    rods.append({
-                        "name":name, "area":cells[1], "luck":cells[2], "lure":cells[3],
-                        "control":cells[4], "resilience":cells[5], "max_weight":cells[6],
-                        "stage":cells[7], "version":cells[8], "source":cells[9],
-                        "obtainable": (cells[10].lower() == "yes") if len(cells)>10 else None
-                    })
-            if not rods:
-                raise RuntimeError("The rod catalog returned no usable entries.")
-            unique = {}
-            for rod in rods:
-                unique[rod["name"].casefold()] = rod
-            self.finished_data.emit(list(unique.values()), f"Loaded {len(unique)} rods from the catalog.")
+                first = [x.casefold() for x in rows[0]]
+                if first and first[0] in ("name", "rod", "rods"):
+                    names = rows[0][1:]
+                    for name in names:
+                        if name and len(name) < 90:
+                            rods.setdefault(name, {"name":name, "source":"Fisch Wiki"})
+                    for row in rows[1:]:
+                        key = aliases.get(row[0].casefold().strip(" :"))
+                        if not key:
+                            continue
+                        for idx, name in enumerate(names, 1):
+                            if idx < len(row) and name in rods and row[idx]:
+                                rods[name][key] = row[idx]
+                else:
+                    header = [x.casefold() for x in rows[0]]
+                    name_col = next((i for i,x in enumerate(header) if x in ("rod","name","rod name")), None)
+                    if name_col is not None and any("luck" in x for x in header):
+                        for row in rows[1:]:
+                            if len(row) <= name_col:
+                                continue
+                            name = row[name_col]
+                            if not name:
+                                continue
+                            item = rods.setdefault(name, {"name":name, "source":"Fisch Wiki"})
+                            for i, head in enumerate(header):
+                                key = aliases.get(head)
+                                if key and i < len(row):
+                                    item[key] = row[i]
+            result = sorted([r for r in rods.values() if r.get("name")], key=lambda r:r["name"].casefold())
+            if not result:
+                raise RuntimeError("Fisch Wiki rod tables could not be parsed.")
+            self.finished_data.emit(result, f"Loaded {len(result)} rods from Fisch Wiki.")
         except Exception as exc:
-            self.finished_data.emit([], f"Catalog update unavailable: {exc}")
+            self.finished_data.emit([], f"Rod data update unavailable: {exc}")
 
 class ImageWorker(QThread):
     loaded = Signal(str, str)
@@ -192,6 +214,7 @@ class FishingWorker(QThread):
         import mss
 
         mouse_held = False
+        next_totem_at = 0.0
         try:
             if not TEMPLATE_FILE.exists():
                 self.status.emit("Capture the SHAKE prompt template first.")
@@ -227,6 +250,19 @@ class FishingWorker(QThread):
             self.status.emit("Ready: visual bite detection and adaptive fish tracking.")
             with mss.mss() as sct:
                 while self.running:
+                    if self.settings.get("auto_totem", False) and time.monotonic() >= next_totem_at:
+                        totem_key = str(self.settings.get("totem_key", "")).strip()
+                        rod_key = str(self.settings.get("rod_key", "")).strip()
+                        if totem_key and rod_key:
+                            self.status.emit("Using configured totem between fishing cycles…")
+                            pyautogui.mouseUp()
+                            pyautogui.press(totem_key)
+                            time.sleep(0.18)
+                            pyautogui.click()
+                            time.sleep(0.35)
+                            pyautogui.press(rod_key)
+                            time.sleep(0.25)
+                        next_totem_at = time.monotonic() + max(30, int(self.settings.get("totem_interval", 300)))
                     pyautogui.mouseUp()
                     mouse_held = False
                     pyautogui.moveTo(cast_x, cast_y)
@@ -388,6 +424,7 @@ class MainWindow(QMainWindow):
         self.settings = read_json(SETTINGS_FILE, DEFAULT_SETTINGS.copy())
         self.rods = read_json(RODS_FILE, SEED_RODS.copy())
         self.worker = None
+        self.macro_active = False
         self.catalog_worker = None
         self.image_worker = None
         self.current_image_name = ""
@@ -502,14 +539,14 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.update_catalog_btn)
         layout.addLayout(bar)
         split = QSplitter()
-        self.rod_table = QTableWidget(0,7)
-        self.rod_table.setHorizontalHeaderLabels(["Rod","Location","Luck","Lure","Control","Resilience","Max weight"])
+        self.rod_table = QTableWidget(0,10)
+        self.rod_table.setHorizontalHeaderLabels(["Rod","Location","Luck","Lure","Control","Resilience","Max weight","Price","Ability","Source"])
         self.rod_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.rod_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.rod_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.rod_table.verticalHeader().setVisible(False)
         self.rod_table.horizontalHeader().setSectionResizeMode(0,QHeaderView.Stretch)
-        for i in range(1,7):
+        for i in range(1,10):
             self.rod_table.horizontalHeader().setSectionResizeMode(i,QHeaderView.ResizeToContents)
         self.rod_table.itemSelectionChanged.connect(self.rod_selected)
         split.addWidget(self.rod_table)
@@ -672,7 +709,7 @@ class MainWindow(QMainWindow):
     def refresh_rod_table(self):
         self.rod_table.setRowCount(len(self.rods))
         for row, rod in enumerate(self.rods):
-            vals = [rod.get("name",""),rod.get("area",""),rod.get("luck","—"),rod.get("lure","—"),rod.get("control","—"),rod.get("resilience","—"),rod.get("max_weight","—")]
+            vals = [rod.get("name",""),rod.get("area",""),rod.get("luck","—"),rod.get("lure","—"),rod.get("control","—"),rod.get("resilience","—"),rod.get("max_weight","—"),rod.get("price","—"),rod.get("ability","—"),rod.get("source","Fisch Wiki")]
             for col, val in enumerate(vals):
                 item = QTableWidgetItem(str(val))
                 item.setData(Qt.UserRole, rod.get("name",""))
@@ -857,9 +894,15 @@ class MainWindow(QMainWindow):
 
     def start_macro(self):
         self.save_settings_silent()
+        self.macro_active = True
         self.worker = FishingWorker(self.settings.copy())
         self.worker.status.connect(self.set_macro_status)
         self.worker.stopped.connect(self.macro_stopped)
+        self.quick_state.setText("Starting")
+        self.auto_state.setText("Starting")
+        self.quick_start.setText("Stop")
+        self.start_btn.setText("Stop automation")
+        self.status_badge.setText("STARTING")
         self.worker.start()
         self.set_macro_status("Starting automation…")
 
@@ -869,6 +912,7 @@ class MainWindow(QMainWindow):
             self.set_macro_status("Stopping…")
 
     def macro_stopped(self):
+        self.macro_active = False
         self.quick_start.setText("Start")
         self.quick_state.setText("Stopped")
         self.auto_state.setText("Stopped")
@@ -877,7 +921,7 @@ class MainWindow(QMainWindow):
     def set_macro_status(self,text):
         self.activity.setText(text)
         self.automation_log.setText(text)
-        running = self.worker is not None and self.worker.isRunning()
+        running = self.macro_active
         self.quick_state.setText("Running" if running else "Stopped")
         self.auto_state.setText("Running" if running else "Stopped")
         self.quick_start.setText("Stop" if running else "Start")
