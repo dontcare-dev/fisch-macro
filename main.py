@@ -1,7 +1,7 @@
 import sys, os, json, time, threading, urllib.parse, re
 from pathlib import Path
 from dataclasses import dataclass
-from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtCore import Qt, QThread, Signal, QSize, QTimer
 from PySide6.QtGui import QPixmap, QIcon, QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -163,7 +163,7 @@ class FishingWorker(QThread):
         try:
             return "roblox" in (pyautogui.getActiveWindowTitle() or "").casefold()
         except Exception:
-            return True
+            return False
     def _runs(self,mask):
         out=[]
         start=None
@@ -191,7 +191,7 @@ class FishingWorker(QThread):
             if not runs:continue
             l,r=max(runs,key=lambda p:p[1]-p[0])
             length=r-l+1
-            if length<w*.20:continue
+            if length<w*.20 or length>w*.65:continue
             score=length-abs((y1+ri)-h*.76)*1.8
             if best is None or score>best[0]:best=(score,l,r,y1+ri)
         if best is None:return None
@@ -321,6 +321,8 @@ class MainWindow(QMainWindow):
         self.select_rod(self.settings.get("selected_rod", "Flimsy Rod"))
         self.refresh_status()
         self.register_hotkey()
+        if len(self.rods) < 100:
+            QTimer.singleShot(350, self.update_catalog)
 
     def build_ui(self):
         root = QWidget()
