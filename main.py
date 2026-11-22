@@ -75,7 +75,7 @@ class CatalogWorker(QThread):
             for table in soup.find_all("table"):
                 rows = []
                 for tr in table.find_all("tr"):
-                    cells = [re.sub(r"\\s+", " ", c.get_text(" ", strip=True)).strip() for c in tr.find_all(["th","td"])]
+                    cells = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip() for c in tr.find_all(["th","td"])]
                     if cells:
                         rows.append(cells)
                 if len(rows) < 3:
