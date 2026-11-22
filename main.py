@@ -70,7 +70,7 @@ class CatalogWorker(QThread):
             rods = []
             for tr in table.find_all("tr"):
                 cells = [c.get_text(" ", strip=True) for c in tr.find_all(["td","th"])]
-                if len(cells) < 8 or cells[0].lower() in ("rod","name"):
+                if len(cells) < 10 or cells[1].lower() in ("rod","name"):
                     continue
                 name = re.sub(r"\s+", " ", cells[0]).strip()
                 if not name or name.lower() in ("own / compare", "rod"):
