@@ -24,14 +24,14 @@ Windows desktop GUI for screen-based Fisch fishing automation.
 3. Run python main.py.
 
 ## Build
-Run build.bat, or use the GitHub Actions workflow to build a Windows executable.
+Run build.bat, or use the GitHub Actions workflow to build a Windows executable. The build excludes unused Qt modules and optional Python packages instead of bundling every PySide6 component.
 
 ## First-time setup
 1. Open Fisch at the screen size and display scale you plan to use.
 2. In Settings, set the cast click position and a scan region that contains the SHAKE prompt and the full reel minigame.
 3. Choose Capture SHAKE prompt. After the message closes, switch to Fisch within three seconds and select a tight crop around the SHAKE button.
 4. Choose Capture moving fish marker. Start a reel minigame, switch to Fisch within three seconds, and select a tight crop around the moving fish icon/marker (not the whole reel bar).
-5. Save settings and test with the game visible. Press F12 (or the configured hotkey) to start or stop.
+5. Save settings and test with the game visible. Keep Fisch in the foreground and press F12 (or the configured hotkey) to start or stop. Starting from the GUI takes focus away from the game; the macro does not bypass the game's AFK or focus rules.
 
 The macro uses visual templates and screen geometry. If the game changes its UI, display scale, or marker appearance, recapture the templates. The live controller uses the detected slider width and fish movement; it does not read game memory. Screen-based detection can still fail if the marker is obscured, the scan region is wrong, or the UI differs from the captured templates.
 
