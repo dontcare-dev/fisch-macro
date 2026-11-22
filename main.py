@@ -130,36 +130,60 @@ class FishingWorker(QThread):
     def stop(self):
         self.running = False
 
-    def _match(self, gray, template, cv2, threshold=None):
+    def _match(self, gray, template, cv2, threshold, center=None, radius=None):
         th, tw = template.shape[:2]
-        if gray.shape[0] < th or gray.shape[1] < tw:
+        search_x, search_y = 0, 0
+        search = gray
+        if center is not None and radius is not None:
+            cx, cy = center
+            x1 = max(0, int(cx - radius - tw // 2))
+            y1 = max(0, int(cy - radius - th // 2))
+            x2 = min(gray.shape[1], int(cx + radius + tw // 2))
+            y2 = min(gray.shape[0], int(cy + radius + th // 2))
+            if x2 - x1 > tw and y2 - y1 > th:
+                search = gray[y1:y2, x1:x2]
+                search_x, search_y = x1, y1
+        if search.shape[0] < th or search.shape[1] < tw:
             return None
-        result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
+        result = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
         _, score, _, location = cv2.minMaxLoc(result)
-        if score < (float(self.settings.get("bite_threshold", 0.78)) if threshold is None else threshold):
+        if score < threshold:
             return None
-        return (location[0] + tw // 2, location[1] + th // 2, float(score))
+        return (location[0] + search_x + tw // 2,
+                location[1] + search_y + th // 2, float(score))
 
-    def _slider_center(self, frame, fish_y, cv2, np):
+    def _slider_geometry(self, frame, fish_y, cv2):
         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-        _, mask = cv2.threshold(gray, 205, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
+        height, width = gray.shape
+        y1 = max(0, fish_y - 65)
+        y2 = min(height, fish_y + 66)
+        band = gray[y1:y2, :]
+        _, mask = cv2.threshold(band, 210, 255, cv2.THRESH_BINARY)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 3))
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         candidates = []
-        height, width = gray.shape
         for contour in contours:
             x, y, w, h = cv2.boundingRect(contour)
             ratio = w / max(1, h)
-            if 18 <= w <= width * 0.72 and 5 <= h <= min(55, height * 0.12) and ratio >= 2.8:
-                center_y = y + h // 2
-                if abs(center_y - fish_y) <= max(35, h * 2):
-                    candidates.append((cv2.contourArea(contour), x + w // 2, w))
+            area = cv2.contourArea(contour)
+            center_y = y1 + y + h / 2
+            distance = abs(center_y - fish_y)
+            if 22 <= w <= width * 0.78 and 5 <= h <= 48 and ratio >= 2.6 and area >= 35:
+                if distance <= 58:
+                    score = area * (1.0 / (1.0 + distance * 0.025)) * min(ratio, 18)
+                    candidates.append((score, x, y1 + y, w, h))
         if not candidates:
             return None
-        candidates.sort(reverse=True)
-        _, center, bar_width = candidates[0]
-        return center, bar_width
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        _, x, y, w, h = candidates[0]
+        return {
+            "center": x + w / 2,
+            "left": x,
+            "right": x + w,
+            "width": w,
+            "y": y + h / 2
+        }
 
     def run(self):
         import pyautogui
@@ -187,12 +211,10 @@ class FishingWorker(QThread):
                 "width": max(1, int(self.settings["region_w"])),
                 "height": max(1, int(self.settings["region_h"]))
             }
-            if bite_template.shape[0] >= region["height"] or bite_template.shape[1] >= region["width"]:
-                self.status.emit("The SHAKE template is too large. Recapture it using the crop selector.")
-                return
-            if fish_template.shape[0] >= region["height"] or fish_template.shape[1] >= region["width"]:
-                self.status.emit("The fish marker template is too large. Recapture it using the crop selector.")
-                return
+            for template, label in ((bite_template, "SHAKE"), (fish_template, "fish")):
+                if template.shape[0] >= region["height"] or template.shape[1] >= region["width"]:
+                    self.status.emit(label + " template is larger than the scan region.")
+                    return
 
             cast_x = int(self.settings["cast_x"])
             cast_y = int(self.settings["cast_y"])
@@ -201,8 +223,8 @@ class FishingWorker(QThread):
                 return
 
             scan_delay = max(0.035, float(self.settings.get("scan_interval", 0.08)))
-            threshold = float(self.settings.get("bite_threshold", 0.78))
-            self.status.emit("Automation running: cast → detect SHAKE → track fish → steer reel bar.")
+            bite_threshold = float(self.settings.get("bite_threshold", 0.82))
+            self.status.emit("Ready: visual bite detection and adaptive fish tracking.")
             with mss.mss() as sct:
                 while self.running:
                     pyautogui.mouseUp()
@@ -211,7 +233,7 @@ class FishingWorker(QThread):
                     pyautogui.mouseDown()
                     time.sleep(0.55)
                     pyautogui.mouseUp()
-                    self.status.emit("Cast sent. Scanning for the moving SHAKE prompt…")
+                    self.status.emit("Cast sent. Scanning for the SHAKE prompt…")
 
                     shake_time = time.monotonic()
                     reel_started = False
@@ -223,74 +245,102 @@ class FishingWorker(QThread):
                         if fish_hit:
                             reel_started = True
                             break
-                        bite_hit = self._match(gray, bite_template, cv2)
-                        if bite_hit and time.monotonic() - last_shake > 0.35:
-                            bx = region["left"] + bite_hit[0]
-                            by = region["top"] + bite_hit[1]
-                            pyautogui.click(bx, by)
+                        bite_hit = self._match(gray, bite_template, cv2, bite_threshold)
+                        if bite_hit and time.monotonic() - last_shake > 0.28:
+                            pyautogui.click(region["left"] + bite_hit[0], region["top"] + bite_hit[1])
                             last_shake = time.monotonic()
-                            self.status.emit(f"SHAKE prompt detected ({bite_hit[2]:.2f}); clicked.")
+                            self.status.emit(f"SHAKE prompt detected ({bite_hit[2]:.2f}).")
                         time.sleep(scan_delay)
 
                     if not self.running:
                         break
                     if not reel_started:
-                        self.status.emit("No reel minigame detected this cast. Stopping safely.")
+                        self.status.emit("No reel minigame detected. Stopped; check the scan region and templates.")
                         break
 
-                    self.status.emit("Fish detected. Adaptive reel tracking active.")
+                    self.status.emit("Fish detected. Adaptive reel control active.")
                     previous_x = None
                     previous_t = time.monotonic()
-                    filtered_velocity = 0.0
-                    missing_since = None
+                    velocity = 0.0
+                    acceleration = 0.0
+                    missing_fish_since = None
+                    missing_bar_since = None
                     last_report = 0.0
+                    last_bar_width = 0
                     while self.running:
                         now = time.monotonic()
                         frame = np.array(sct.grab(region))
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        fish_hit = self._match(gray, fish_template, cv2, 0.68)
+                        radius = None
+                        if previous_x is not None:
+                            radius = min(300, max(85, abs(velocity) * 0.24 + 75))
+                        fish_hit = self._match(
+                            gray, fish_template, cv2, 0.64,
+                            (previous_x, previous_y) if previous_x is not None else None,
+                            radius
+                        )
+                        if fish_hit is None and previous_x is not None:
+                            fish_hit = self._match(gray, fish_template, cv2, 0.70)
                         if fish_hit is None:
-                            if missing_since is None:
-                                missing_since = now
-                            if now - missing_since >= 1.8:
+                            if missing_fish_since is None:
+                                missing_fish_since = now
+                            if now - missing_fish_since >= 1.25:
                                 break
                             time.sleep(scan_delay)
                             continue
 
-                        missing_since = None
-                        fish_x, fish_y, score = fish_hit
-                        slider = self._slider_center(frame, fish_y, cv2, np)
+                        missing_fish_since = None
+                        fish_x, fish_y, confidence = fish_hit
+                        slider = self._slider_geometry(frame, fish_y, cv2)
                         if slider is None:
-                            if mouse_held:
+                            if missing_bar_since is None:
+                                missing_bar_since = now
+                            if now - missing_bar_since > 0.22 and mouse_held:
                                 pyautogui.mouseUp()
                                 mouse_held = False
-                            self.status.emit("Fish visible; locating the white reel slider…")
+                            if now - last_report > 0.8:
+                                self.status.emit("Fish tracked; reacquiring reel bar.")
+                                last_report = now
                             time.sleep(scan_delay)
                             continue
+                        missing_bar_since = None
+                        last_bar_width = slider["width"]
 
-                        slider_x, slider_width = slider
-                        dt = max(0.02, now - previous_t)
+                        dt = max(0.025, min(0.25, now - previous_t))
                         if previous_x is not None:
-                            instant_velocity = (fish_x - previous_x) / dt
-                            instant_velocity = max(-900.0, min(900.0, instant_velocity))
-                            filtered_velocity = 0.65 * filtered_velocity + 0.35 * instant_velocity
-                        previous_x = fish_x
-                        previous_t = now
+                            new_velocity = (fish_x - previous_x) / dt
+                            new_velocity = max(-1400.0, min(1400.0, new_velocity))
+                            new_acceleration = (new_velocity - velocity) / dt
+                            acceleration = 0.72 * acceleration + 0.28 * max(-5000.0, min(5000.0, new_acceleration))
+                            velocity = 0.58 * velocity + 0.42 * new_velocity
+                        previous_x, previous_y, previous_t = fish_x, fish_y, now
 
-                        predicted_x = fish_x + max(-45.0, min(45.0, filtered_velocity * 0.13))
-                        deadband = max(5.0, slider_width * 0.16)
-                        error = predicted_x - slider_x
-                        if error > deadband and not mouse_held:
+                        # Predict the fish position slightly ahead; shorten the horizon when motion is erratic.
+                        horizon = 0.10 if abs(acceleration) < 1600 else 0.055
+                        predicted_x = fish_x + velocity * horizon + 0.5 * acceleration * horizon * horizon
+                        predicted_x = max(0, min(region["width"] - 1, predicted_x))
+                        bar_center = slider["center"]
+                        bar_half = max(4.0, slider["width"] * 0.5)
+                        inner_margin = max(4.0, min(13.0, slider["width"] * 0.12))
+                        safe_left = bar_center - bar_half + inner_margin
+                        safe_right = bar_center + bar_half - inner_margin
+
+                        # Hysteresis prevents rapid press/release flicker at the bar edge.
+                        if predicted_x > safe_right and not mouse_held:
                             pyautogui.mouseDown()
                             mouse_held = True
-                        elif error < -deadband and mouse_held:
+                        elif predicted_x < safe_left and mouse_held:
                             pyautogui.mouseUp()
                             mouse_held = False
+                        elif safe_left <= predicted_x <= safe_right:
+                            # Keep the current input briefly inside the safe zone to avoid oscillation.
+                            pass
 
-                        if now - last_report > 0.6:
-                            direction = "HOLD →" if mouse_held else "RELEASE ←"
+                        if now - last_report > 0.55:
+                            state = "HOLD" if mouse_held else "RELEASE"
                             self.status.emit(
-                                f"Tracking fish ({score:.2f}) · {direction} · offset {int(error)} px"
+                                f"Fish {confidence:.2f} · {state} · bar {last_bar_width}px · "
+                                f"lead {int(predicted_x - bar_center)}px"
                             )
                             last_report = now
                         time.sleep(scan_delay)
@@ -300,7 +350,7 @@ class FishingWorker(QThread):
                         mouse_held = False
                     if not self.running:
                         break
-                    self.status.emit("Reel marker disappeared. Waiting for the catch screen…")
+                    self.status.emit("Fish marker left the reel area. Preparing next cast…")
                     time.sleep(float(self.settings.get("recast_delay", 1.4)))
                     if not self.settings.get("auto_recast", True):
                         break
