@@ -23,7 +23,7 @@ WIKI_API = "https://fisch.wiki/api.php"
 DEFAULT_SETTINGS = {
     "hotkey": "f12", "cast_x": 0, "cast_y": 0, "bite_x": 0, "bite_y": 0,
     "region_x": 0, "region_y": 0, "region_w": 900, "region_h": 600,
-    "scan_interval": 0.06, "bite_threshold": 0.82, "reel_click_ms": 120,
+    "scan_interval": 0.04, "cast_hold": 0.95,
     "recast_delay": 1.4, "selected_rod": "Flimsy Rod", "auto_recast": True,
     "auto_totem": False, "totem_name": "Sundial Totem", "totem_key": "3", "rod_key": "1", "totem_interval": 300
 }
@@ -58,62 +58,72 @@ class CatalogWorker(QThread):
         try:
             import requests
             from bs4 import BeautifulSoup
-            response = requests.get(CATALOG_URL, timeout=25, headers={"User-Agent":"FishMacro/2.0"})
+            rods = {}
+            response = requests.get("https://oofwiki.com/fisch/rods", timeout=25, headers={"User-Agent":"FishMacro/3.0"})
             response.raise_for_status()
             soup = BeautifulSoup(response.text, "html.parser")
-            rods = {}
             aliases = {
-                "lure speed": "lure", "lure speed (%)": "lure",
-                "luck": "luck", "luck (%)": "luck",
-                "control": "control", "resilience": "resilience",
-                "resilience (%)": "resilience", "max kg": "max_weight",
-                "max kg (kg)": "max_weight", "max weight": "max_weight",
-                "price": "price", "cost": "price", "ability": "ability",
-                "location": "area", "area": "area", "stage": "stage",
-                "version": "version", "source": "source"
+                "rod":"name","name":"name","rod name":"name","price":"price",
+                "lure speed":"lure","lure speed (%)":"lure","luck":"luck","luck (%)":"luck",
+                "control":"control","resilience":"resilience","resilience (%)":"resilience",
+                "max weight":"max_weight","max kg":"max_weight","where to get it":"area",
+                "location":"area","area":"area","obtainable":"obtainable","ability":"ability","passive":"ability"
             }
             for table in soup.find_all("table"):
-                rows = []
-                for tr in table.find_all("tr"):
-                    cells = [re.sub(r"\s+", " ", c.get_text(" ", strip=True)).strip() for c in tr.find_all(["th","td"])]
-                    if cells:
-                        rows.append(cells)
-                if len(rows) < 3:
+                trs=table.find_all("tr")
+                header=None
+                hi=-1
+                for idx,tr in enumerate(trs[:5]):
+                    cells=[re.sub(r"\\s+"," ",c.get_text(" ",strip=True)).strip() for c in tr.find_all(["th","td"])]
+                    norm=[re.sub(r"\\s+"," ",x.casefold()).strip(" :") for x in cells]
+                    if any(x in ("rod","name","rod name") for x in norm) and any("luck" in x for x in norm):
+                        header,hi=norm,idx
+                        break
+                if header is None:
                     continue
-                first = [x.casefold() for x in rows[0]]
-                if first and first[0] in ("name", "rod", "rods"):
-                    names = rows[0][1:]
-                    for name in names:
-                        if name and len(name) < 90:
-                            rods.setdefault(name, {"name":name, "source":"Fisch Wiki"})
-                    for row in rows[1:]:
-                        key = aliases.get(row[0].casefold().strip(" :"))
-                        if not key:
-                            continue
-                        for idx, name in enumerate(names, 1):
-                            if idx < len(row) and name in rods and row[idx]:
-                                rods[name][key] = row[idx]
-                else:
-                    header = [x.casefold() for x in rows[0]]
-                    name_col = next((i for i,x in enumerate(header) if x in ("rod","name","rod name")), None)
-                    if name_col is not None and any("luck" in x for x in header):
-                        for row in rows[1:]:
-                            if len(row) <= name_col:
-                                continue
-                            name = row[name_col]
-                            if not name:
-                                continue
-                            item = rods.setdefault(name, {"name":name, "source":"Fisch Wiki"})
-                            for i, head in enumerate(header):
-                                key = aliases.get(head)
-                                if key and i < len(row):
-                                    item[key] = row[i]
-            result = sorted([r for r in rods.values() if r.get("name")], key=lambda r:r["name"].casefold())
-            if not result:
-                raise RuntimeError("Fisch Wiki rod tables could not be parsed.")
-            self.finished_data.emit(result, f"Loaded {len(result)} rods from Fisch Wiki.")
+                keys=[aliases.get(x,next((v for k,v in aliases.items() if k in x),None)) for x in header]
+                ni=next((i for i,k in enumerate(keys) if k=="name"),None)
+                if ni is None:
+                    continue
+                for tr in trs[hi+1:]:
+                    cells=[re.sub(r"\\s+"," ",c.get_text(" ",strip=True)).strip() for c in tr.find_all(["th","td"])]
+                    if len(cells)<=ni or not cells[ni]:
+                        continue
+                    name=cells[ni]
+                    item=rods.setdefault(name.casefold(),{"name":name,"source":"OofWiki"})
+                    for i,key in enumerate(keys):
+                        if key and i<len(cells) and cells[i]:
+                            value=cells[i]
+                            item[key]=value.casefold() in ("yes","true","obtainable") if key=="obtainable" else value
+            try:
+                data_url="https://raw.githubusercontent.com/VinnyInnit/fisch-macro/main/macro/fisch_data.json"
+                data_response=requests.get(data_url,timeout=18,headers={"User-Agent":"FishMacro/3.0"})
+                data_response.raise_for_status()
+                for name,values in data_response.json().get("rods",{}).items():
+                    if not isinstance(values,list) or len(values)<4:
+                        continue
+                    item=rods.setdefault(name.casefold(),{"name":name,"source":"Fisch Wiki data index"})
+                    item.setdefault("control",str(values[0]))
+                    item.setdefault("resilience",str(values[1])+"%")
+                    item.setdefault("lure",str(values[3])+"%")
+                    if values[2]:
+                        item["minigame"]=str(values[2])
+                    if item.get("source")=="OofWiki":
+                        item["source"]="OofWiki + Fisch Wiki index"
+            except Exception:
+                pass
+            rods.setdefault("seraphic rod",{
+                "name":"Seraphic Rod","price":"No Price","lure":"0%","luck":"+225%",
+                "control":"0.25","resilience":"+20%","max_weight":"Unlimited",
+                "area":"Level 1,000","ability":"Blessed (35%, 8.5×); Heavenly (10%, 6×)",
+                "source":"Rowikis"
+            })
+            result=sorted(rods.values(),key=lambda r:r.get("name","").casefold())
+            if len(result)<100:
+                raise RuntimeError(f"Only {len(result)} rods found; incomplete data was not saved.")
+            self.finished_data.emit(result,f"Loaded {len(result)} rods from multiple public catalogs.")
         except Exception as exc:
-            self.finished_data.emit([], f"Rod data update unavailable: {exc}")
+            self.finished_data.emit([],f"Rod catalog update unavailable: {exc}")
 
 class ImageWorker(QThread):
     loaded = Signal(str, str)
@@ -143,262 +153,137 @@ class ImageWorker(QThread):
 class FishingWorker(QThread):
     status = Signal(str)
     stopped = Signal()
-
-    def __init__(self, settings):
+    def __init__(self,settings):
         super().__init__()
-        self.settings = settings
-        self.running = True
-
+        self.settings=settings
+        self.running=True
     def stop(self):
-        self.running = False
-
-    def _match(self, gray, template, cv2, threshold, center=None, radius=None):
-        th, tw = template.shape[:2]
-        search_x, search_y = 0, 0
-        search = gray
-        if center is not None and radius is not None:
-            cx, cy = center
-            x1 = max(0, int(cx - radius - tw // 2))
-            y1 = max(0, int(cy - radius - th // 2))
-            x2 = min(gray.shape[1], int(cx + radius + tw // 2))
-            y2 = min(gray.shape[0], int(cy + radius + th // 2))
-            if x2 - x1 > tw and y2 - y1 > th:
-                search = gray[y1:y2, x1:x2]
-                search_x, search_y = x1, y1
-        if search.shape[0] < th or search.shape[1] < tw:
-            return None
-        result = cv2.matchTemplate(search, template, cv2.TM_CCOEFF_NORMED)
-        _, score, _, location = cv2.minMaxLoc(result)
-        if score < threshold:
-            return None
-        return (location[0] + search_x + tw // 2,
-                location[1] + search_y + th // 2, float(score))
-
-    def _slider_geometry(self, frame, fish_y, cv2):
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-        height, width = gray.shape
-        y1 = max(0, fish_y - 65)
-        y2 = min(height, fish_y + 66)
-        band = gray[y1:y2, :]
-        _, mask = cv2.threshold(band, 210, 255, cv2.THRESH_BINARY)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 3))
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        candidates = []
-        for contour in contours:
-            x, y, w, h = cv2.boundingRect(contour)
-            ratio = w / max(1, h)
-            area = cv2.contourArea(contour)
-            center_y = y1 + y + h / 2
-            distance = abs(center_y - fish_y)
-            if 22 <= w <= width * 0.78 and 5 <= h <= 48 and ratio >= 2.6 and area >= 35:
-                if distance <= 58:
-                    score = area * (1.0 / (1.0 + distance * 0.025)) * min(ratio, 18)
-                    candidates.append((score, x, y1 + y, w, h))
-        if not candidates:
-            return None
-        candidates.sort(key=lambda item: item[0], reverse=True)
-        _, x, y, w, h = candidates[0]
-        return {
-            "center": x + w / 2,
-            "left": x,
-            "right": x + w,
-            "width": w,
-            "y": y + h / 2
-        }
-
-    def run(self):
-        import pyautogui
-        import cv2
-        import numpy as np
-        import mss
-
-        mouse_held = False
-        next_totem_at = 0.0
+        self.running=False
+    def _game_focused(self,pyautogui):
         try:
-            if not TEMPLATE_FILE.exists():
-                self.status.emit("Capture the SHAKE prompt template first.")
+            return "roblox" in (pyautogui.getActiveWindowTitle() or "").casefold()
+        except Exception:
+            return True
+    def _runs(self,mask):
+        out=[]
+        start=None
+        for i,v in enumerate(mask):
+            if v and start is None:
+                start=i
+            elif not v and start is not None:
+                out.append((start,i-1));start=None
+        if start is not None:
+            out.append((start,len(mask)-1))
+        return out
+    def _detect_reel(self,frame,np):
+        rgb=frame[:,:,:3][:,:,::-1].astype(np.int16)
+        h,w=rgb.shape[:2]
+        if h<300 or w<500:return None
+        track=np.array([25,25,30],dtype=np.int16)
+        bar=np.array([239,238,239],dtype=np.int16)
+        fish=np.array([66,74,90],dtype=np.int16)
+        x1,x2=int(w*.10),int(w*.90)
+        y1,y2=int(h*.52),int(h*.91)
+        dark=np.max(np.abs(rgb[y1:y2,x1:x2]-track),axis=2)<=42
+        best=None
+        for ri,row in enumerate(dark):
+            runs=self._runs(row)
+            if not runs:continue
+            l,r=max(runs,key=lambda p:p[1]-p[0])
+            length=r-l+1
+            if length<w*.20:continue
+            score=length-abs((y1+ri)-h*.76)*1.8
+            if best is None or score>best[0]:best=(score,l,r,y1+ri)
+        if best is None:return None
+        _,ll,rr,ty=best
+        left,right=x1+ll,x1+rr
+        tw=right-left+1
+        band=rgb[max(0,ty-4):min(h,ty+5),left:right+1]
+        bm=np.max(np.abs(band-bar),axis=2)<=58
+        fm=np.max(np.abs(band-fish),axis=2)<=42
+        br=[p for p in self._runs(np.any(bm,axis=0)) if 5<=p[1]-p[0]+1<=tw*.55]
+        fr=[p for p in self._runs(np.any(fm,axis=0)) if 1<=p[1]-p[0]+1<=10]
+        if not br or not fr:return None
+        bl,be=max(br,key=lambda p:p[1]-p[0])
+        fl,fe=max(fr,key=lambda p:(1 if p[1]-p[0]<=4 else .3)*(1-abs((p[0]+p[1])/2-tw/2)/max(1,tw)))
+        return {"bar_center":left+(bl+be)/2,"bar_width":be-bl+1,"fish_x":left+(fl+fe)/2}
+    def run(self):
+        import pyautogui,numpy as np,mss
+        held=False
+        try:
+            cx,cy=int(self.settings.get("cast_x",0)),int(self.settings.get("cast_y",0))
+            if cx<=0 or cy<=0:
+                self.status.emit("Set one fixed cast point. No movement recording or playback is used.")
                 return
-            if not FISH_TEMPLATE_FILE.exists():
-                self.status.emit("Capture the moving fish marker template first.")
-                return
-            bite_template = cv2.imread(str(TEMPLATE_FILE), cv2.IMREAD_GRAYSCALE)
-            fish_template = cv2.imread(str(FISH_TEMPLATE_FILE), cv2.IMREAD_GRAYSCALE)
-            if bite_template is None or fish_template is None:
-                self.status.emit("A visual template is invalid. Recapture both templates.")
-                return
-
-            region = {
-                "left": int(self.settings["region_x"]),
-                "top": int(self.settings["region_y"]),
-                "width": max(1, int(self.settings["region_w"])),
-                "height": max(1, int(self.settings["region_h"]))
-            }
-            for template, label in ((bite_template, "SHAKE"), (fish_template, "fish")):
-                if template.shape[0] >= region["height"] or template.shape[1] >= region["width"]:
-                    self.status.emit(label + " template is larger than the scan region.")
-                    return
-
-            cast_x = int(self.settings["cast_x"])
-            cast_y = int(self.settings["cast_y"])
-            if cast_x <= 0 or cast_y <= 0:
-                self.status.emit("Set the cast click position in Settings first.")
-                return
-
-            scan_delay = max(0.035, float(self.settings.get("scan_interval", 0.08)))
-            bite_threshold = float(self.settings.get("bite_threshold", 0.82))
-            self.status.emit("Ready: visual bite detection and adaptive fish tracking.")
+            delay=max(.025,float(self.settings.get("scan_interval",.04)))
+            cast_hold=max(.25,float(self.settings.get("cast_hold",.95)))
+            self.status.emit("Live screen detection ready. Keep Roblox in the foreground.")
             with mss.mss() as sct:
+                monitor=sct.monitors[1]
                 while self.running:
-                    if self.settings.get("auto_totem", False) and time.monotonic() >= next_totem_at:
-                        totem_key = str(self.settings.get("totem_key", "")).strip()
-                        rod_key = str(self.settings.get("rod_key", "")).strip()
-                        if totem_key and rod_key:
-                            self.status.emit("Using configured totem between fishing cycles…")
-                            pyautogui.mouseUp()
-                            pyautogui.press(totem_key)
-                            time.sleep(0.18)
-                            pyautogui.click()
-                            time.sleep(0.35)
-                            pyautogui.press(rod_key)
-                            time.sleep(0.25)
-                        next_totem_at = time.monotonic() + max(30, int(self.settings.get("totem_interval", 300)))
-                    pyautogui.mouseUp()
-                    mouse_held = False
-                    pyautogui.moveTo(cast_x, cast_y)
-                    pyautogui.mouseDown()
-                    time.sleep(0.55)
-                    pyautogui.mouseUp()
-                    self.status.emit("Cast sent. Scanning for the SHAKE prompt…")
-
-                    shake_time = time.monotonic()
-                    reel_started = False
-                    last_shake = 0.0
-                    while self.running and time.monotonic() - shake_time < 90:
-                        frame = np.array(sct.grab(region))
-                        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        fish_hit = self._match(gray, fish_template, cv2, 0.68)
-                        if fish_hit:
-                            reel_started = True
-                            break
-                        bite_hit = self._match(gray, bite_template, cv2, bite_threshold)
-                        if bite_hit and time.monotonic() - last_shake > 0.28:
-                            pyautogui.click(region["left"] + bite_hit[0], region["top"] + bite_hit[1])
-                            last_shake = time.monotonic()
-                            self.status.emit(f"SHAKE prompt detected ({bite_hit[2]:.2f}).")
-                        time.sleep(scan_delay)
-
-                    if not self.running:
-                        break
-                    if not reel_started:
-                        self.status.emit("No reel minigame detected. Stopped; check the scan region and templates.")
-                        break
-
-                    self.status.emit("Fish detected. Adaptive reel control active.")
-                    previous_x = None
-                    previous_t = time.monotonic()
-                    velocity = 0.0
-                    acceleration = 0.0
-                    missing_fish_since = None
-                    missing_bar_since = None
-                    last_report = 0.0
-                    last_bar_width = 0
+                    while self.running and not self._game_focused(pyautogui):
+                        self.status.emit("Waiting for Roblox focus. Use F12 while the game is active.")
+                        time.sleep(.25)
+                    if not self.running:break
+                    pyautogui.moveTo(cx,cy);pyautogui.mouseDown();time.sleep(cast_hold);pyautogui.mouseUp()
+                    self.status.emit("Cast sent. Waiting for the reel UI…")
+                    started=time.monotonic();reel=None
+                    while self.running and time.monotonic()-started<100:
+                        if not self._game_focused(pyautogui):
+                            time.sleep(.2);continue
+                        reel=self._detect_reel(np.array(sct.grab(monitor)),np)
+                        if reel:break
+                        time.sleep(delay)
+                    if not self.running:break
+                    if reel is None:
+                        self.status.emit("Reel UI not found. Check display scale and cast point.");time.sleep(1);continue
+                    self.status.emit("Reel detected. Tracking live fish and bar.")
+                    px,pt=None,time.monotonic()
+                    velocity=accel=0.0
+                    missing=None
+                    report=0.0
                     while self.running:
-                        now = time.monotonic()
-                        frame = np.array(sct.grab(region))
-                        gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        radius = None
-                        if previous_x is not None:
-                            radius = min(300, max(85, abs(velocity) * 0.24 + 75))
-                        fish_hit = self._match(
-                            gray, fish_template, cv2, 0.64,
-                            (previous_x, previous_y) if previous_x is not None else None,
-                            radius
-                        )
-                        if fish_hit is None and previous_x is not None:
-                            fish_hit = self._match(gray, fish_template, cv2, 0.70)
-                        if fish_hit is None:
-                            if missing_fish_since is None:
-                                missing_fish_since = now
-                            if now - missing_fish_since >= 1.25:
-                                break
-                            time.sleep(scan_delay)
-                            continue
-
-                        missing_fish_since = None
-                        fish_x, fish_y, confidence = fish_hit
-                        slider = self._slider_geometry(frame, fish_y, cv2)
-                        if slider is None:
-                            if missing_bar_since is None:
-                                missing_bar_since = now
-                            if now - missing_bar_since > 0.22 and mouse_held:
-                                pyautogui.mouseUp()
-                                mouse_held = False
-                            if now - last_report > 0.8:
-                                self.status.emit("Fish tracked; reacquiring reel bar.")
-                                last_report = now
-                            time.sleep(scan_delay)
-                            continue
-                        missing_bar_since = None
-                        last_bar_width = slider["width"]
-
-                        dt = max(0.025, min(0.25, now - previous_t))
-                        if previous_x is not None:
-                            new_velocity = (fish_x - previous_x) / dt
-                            new_velocity = max(-1400.0, min(1400.0, new_velocity))
-                            new_acceleration = (new_velocity - velocity) / dt
-                            acceleration = 0.72 * acceleration + 0.28 * max(-5000.0, min(5000.0, new_acceleration))
-                            velocity = 0.58 * velocity + 0.42 * new_velocity
-                        previous_x, previous_y, previous_t = fish_x, fish_y, now
-
-                        # Predict the fish position slightly ahead; shorten the horizon when motion is erratic.
-                        horizon = 0.10 if abs(acceleration) < 1600 else 0.055
-                        predicted_x = fish_x + velocity * horizon + 0.5 * acceleration * horizon * horizon
-                        predicted_x = max(0, min(region["width"] - 1, predicted_x))
-                        bar_center = slider["center"]
-                        bar_half = max(4.0, slider["width"] * 0.5)
-                        inner_margin = max(4.0, min(13.0, slider["width"] * 0.12))
-                        safe_left = bar_center - bar_half + inner_margin
-                        safe_right = bar_center + bar_half - inner_margin
-
-                        # Hysteresis prevents rapid press/release flicker at the bar edge.
-                        if predicted_x > safe_right and not mouse_held:
-                            pyautogui.mouseDown()
-                            mouse_held = True
-                        elif predicted_x < safe_left and mouse_held:
-                            pyautogui.mouseUp()
-                            mouse_held = False
-                        elif safe_left <= predicted_x <= safe_right:
-                            # Keep the current input briefly inside the safe zone to avoid oscillation.
-                            pass
-
-                        if now - last_report > 0.55:
-                            state = "HOLD" if mouse_held else "RELEASE"
-                            self.status.emit(
-                                f"Fish {confidence:.2f} · {state} · bar {last_bar_width}px · "
-                                f"lead {int(predicted_x - bar_center)}px"
-                            )
-                            last_report = now
-                        time.sleep(scan_delay)
-
-                    if mouse_held:
-                        pyautogui.mouseUp()
-                        mouse_held = False
-                    if not self.running:
-                        break
-                    self.status.emit("Fish marker left the reel area. Preparing next cast…")
-                    time.sleep(float(self.settings.get("recast_delay", 1.4)))
-                    if not self.settings.get("auto_recast", True):
-                        break
-
+                        if not self._game_focused(pyautogui):
+                            if held:pyautogui.mouseUp();held=False
+                            self.status.emit("Paused until Roblox is focused.")
+                            time.sleep(.2);continue
+                        now=time.monotonic()
+                        reel=self._detect_reel(np.array(sct.grab(monitor)),np)
+                        if reel is None:
+                            if missing is None:missing=now
+                            if now-missing>.9:break
+                            time.sleep(delay);continue
+                        missing=None
+                        fx,bc=reel["fish_x"],reel["bar_center"]
+                        half=max(3.0,reel["bar_width"]*.5)
+                        margin=max(3.0,min(12.0,reel["bar_width"]*.12))
+                        left,right=bc-half+margin,bc+half-margin
+                        dt=max(.02,min(.2,now-pt))
+                        if px is not None:
+                            v=max(-1800.0,min(1800.0,(fx-px)/dt))
+                            av=(v-velocity)/dt
+                            accel=.7*accel+.3*max(-6500.0,min(6500.0,av))
+                            velocity=.55*velocity+.45*v
+                        px,pt=fx,now
+                        lead=.075 if abs(accel)<1800 else .04
+                        predicted=fx+velocity*lead+.5*accel*lead*lead
+                        if predicted>right and not held:pyautogui.mouseDown();held=True
+                        elif predicted<left and held:pyautogui.mouseUp();held=False
+                        if now-report>.6:
+                            self.status.emit(f"Fish {int(fx)} · Bar {reel['bar_width']}px · {'HOLD' if held else 'RELEASE'}")
+                            report=now
+                        time.sleep(delay)
+                    if held:pyautogui.mouseUp();held=False
+                    if not self.running:break
+                    self.status.emit("Catch cycle ended. Recasting…")
+                    time.sleep(float(self.settings.get("recast_delay",1.4)))
+                    if not self.settings.get("auto_recast",True):break
             self.status.emit("Automation stopped.")
         except Exception as exc:
             self.status.emit(f"Automation error: {exc}")
         finally:
-            try:
-                pyautogui.mouseUp()
-            except Exception:
-                pass
+            try:pyautogui.mouseUp()
+            except Exception:pass
             self.stopped.emit()
 
 
@@ -643,27 +528,21 @@ class MainWindow(QMainWindow):
         timing = QGroupBox("Detection and timing")
         tf = QFormLayout(timing)
         self.scan_interval = QDoubleSpinBox(); self.scan_interval.setRange(0.035,2); self.scan_interval.setSingleStep(0.01); self.scan_interval.setValue(float(self.settings["scan_interval"]))
-        self.threshold = QDoubleSpinBox(); self.threshold.setRange(0.5,0.99); self.threshold.setSingleStep(0.01); self.threshold.setValue(float(self.settings["bite_threshold"]))
-        self.reel_ms = self.spin(50,2000,self.settings["reel_click_ms"])
+        self.cast_hold_input = QDoubleSpinBox(); self.cast_hold_input.setRange(0.25,3.0); self.cast_hold_input.setSingleStep(0.05); self.cast_hold_input.setValue(float(self.settings.get("cast_hold",0.95)))
         self.recast_delay = QDoubleSpinBox(); self.recast_delay.setRange(0.2,30); self.recast_delay.setSingleStep(0.2); self.recast_delay.setValue(float(self.settings["recast_delay"]))
         self.auto_recast = QCheckBox("Automatically cast again after a detected prompt"); self.auto_recast.setChecked(bool(self.settings["auto_recast"]))
         tf.addRow("Screen scan interval (s)",self.scan_interval)
-        tf.addRow("Image match threshold",self.threshold)
-        tf.addRow("Click duration (ms)",self.reel_ms)
+        tf.addRow("Cast hold duration (s)",self.cast_hold_input)
         tf.addRow("Recast delay (s)",self.recast_delay)
         tf.addRow(self.auto_recast)
         outer.addWidget(timing)
-        template = QGroupBox("Visual fishing markers")
-        tl = QVBoxLayout(template)
-        self.template_status = QLabel("SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") + " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured"))
-        self.capture_template_btn = QPushButton("Capture SHAKE prompt")
-        self.capture_template_btn.clicked.connect(lambda: self.capture_template("bite"))
-        self.capture_fish_btn = QPushButton("Capture moving fish marker")
-        self.capture_fish_btn.clicked.connect(lambda: self.capture_template("fish"))
-        tl.addWidget(self.template_status)
-        tl.addWidget(self.capture_template_btn)
-        tl.addWidget(self.capture_fish_btn)
-        outer.addWidget(template)
+        detection = QGroupBox("Automatic detection")
+        detection_layout = QVBoxLayout(detection)
+        self.template_status = QLabel("Live screen detection. No templates or recorded movement required.")
+        self.template_status.setObjectName("muted")
+        self.template_status.setWordWrap(True)
+        detection_layout.addWidget(self.template_status)
+        outer.addWidget(detection)
         totems = QGroupBox("Auto totem")
         tof = QFormLayout(totems)
         self.auto_totem = QCheckBox("Use a totem automatically between fishing cycles")
@@ -888,54 +767,12 @@ class MainWindow(QMainWindow):
             self.activity.setText(message)
             QMessageBox.information(self,"Catalog update",message)
 
-    def capture_template(self, kind="bite"):
-        try:
-            import pyautogui
-            import cv2
-            import numpy as np
-            x, y = self.rx.value(), self.ry.value()
-            w, h = self.rw.value(), self.rh.value()
-            if w < 40 or h < 40:
-                raise ValueError("The scan region is too small.")
-            label = "SHAKE prompt" if kind == "bite" else "moving fish marker"
-            QMessageBox.information(
-                self, "Capture " + label,
-                "Put Fisch on the screen with the " + label + " clearly visible. "
-                "After closing this message, switch to the game within 3 seconds. "
-                "A crop selector will open; drag a tight box around only the " + label + "."
-            )
-            time.sleep(3)
-            shot = pyautogui.screenshot(region=(x, y, w, h))
-            frame = cv2.cvtColor(np.array(shot), cv2.COLOR_RGB2BGR)
-            roi = cv2.selectROI("Select " + label, frame, showCrosshair=True, fromCenter=False)
-            cv2.destroyAllWindows()
-            rx, ry, rw, rh = [int(v) for v in roi]
-            if rw < 5 or rh < 5:
-                return
-            crop = cv2.cvtColor(frame[ry:ry+rh, rx:rx+rw], cv2.COLOR_BGR2GRAY)
-            target = TEMPLATE_FILE if kind == "bite" else FISH_TEMPLATE_FILE
-            if not cv2.imwrite(str(target), crop):
-                raise ValueError("Could not save the selected marker.")
-            self.template_status.setText(
-                "SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") +
-                " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured")
-            )
-            self.activity.setText(label.capitalize() + " template captured.")
-        except Exception as exc:
-            try:
-                import cv2
-                cv2.destroyAllWindows()
-            except Exception:
-                pass
-            QMessageBox.warning(self, "Capture failed", str(exc))
-
     def save_settings(self):
         self.settings.update({
             "hotkey":self.hotkey_input.text().strip().lower() or "f12",
             "cast_x":self.cast_x.value(),"cast_y":self.cast_y.value(),
-            "region_x":self.rx.value(),"region_y":self.ry.value(),"region_w":self.rw.value(),"region_h":self.rh.value(),
-            "scan_interval":self.scan_interval.value(),"bite_threshold":self.threshold.value(),
-            "reel_click_ms":self.reel_ms.value(),"recast_delay":self.recast_delay.value(),
+            "scan_interval":self.scan_interval.value(),"cast_hold":self.cast_hold_input.value(),
+            "recast_delay":self.recast_delay.value(),
             "auto_recast":self.auto_recast.isChecked(),
             "auto_totem":self.auto_totem.isChecked(),
             "totem_name":self.totem_select.currentText(),
@@ -1019,7 +856,8 @@ class MainWindow(QMainWindow):
         save_json(SETTINGS_FILE,self.settings)
 
     def refresh_status(self):
-        self.template_status.setText("SHAKE prompt: " + ("ready" if TEMPLATE_FILE.exists() else "not captured") + " · Fish marker: " + ("ready" if FISH_TEMPLATE_FILE.exists() else "not captured"))
+        if hasattr(self,"template_status"):
+            self.template_status.setText("Live screen detection. No templates or recorded movement required.")
 
     def closeEvent(self,event):
         self.stop_macro()
