@@ -130,13 +130,13 @@ class FishingWorker(QThread):
     def stop(self):
         self.running = False
 
-    def _match(self, gray, template, cv2):
+    def _match(self, gray, template, cv2, threshold=None):
         th, tw = template.shape[:2]
         if gray.shape[0] < th or gray.shape[1] < tw:
             return None
         result = cv2.matchTemplate(gray, template, cv2.TM_CCOEFF_NORMED)
         _, score, _, location = cv2.minMaxLoc(result)
-        if score < float(self.settings.get("bite_threshold", 0.78)):
+        if score < (float(self.settings.get("bite_threshold", 0.78)) if threshold is None else threshold):
             return None
         return (location[0] + tw // 2, location[1] + th // 2, float(score))
 
@@ -219,7 +219,7 @@ class FishingWorker(QThread):
                     while self.running and time.monotonic() - shake_time < 90:
                         frame = np.array(sct.grab(region))
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        fish_hit = self._match(gray, fish_template, cv2)
+                        fish_hit = self._match(gray, fish_template, cv2, 0.68)
                         if fish_hit:
                             reel_started = True
                             break
