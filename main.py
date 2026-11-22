@@ -115,6 +115,39 @@ class CatalogWorker(QThread):
         except Exception as exc:
             self.finished_data.emit([], f"Rod data update unavailable: {exc}")
 
+class AppraisalDataWorker(QThread):
+    loaded = Signal(list, str)
+    def run(self):
+        try:
+            import requests
+            from bs4 import BeautifulSoup
+            url = "https://fisch.wiki/wiki/appraiser/"
+            response = requests.get(url, timeout=25, headers={"User-Agent":"FishMacro/2.0"})
+            response.raise_for_status()
+            soup = BeautifulSoup(response.text, "html.parser")
+            found = []
+            for table in soup.find_all("table"):
+                rows = [[c.get_text(" ", strip=True) for c in tr.find_all(["th","td"])] for tr in table.find_all("tr")]
+                rows = [r for r in rows if r]
+                if not rows:
+                    continue
+                header = " ".join(rows[0]).casefold()
+                if "chance" not in header or not any("mutation" in x.casefold() or "name" in x.casefold() for x in rows[0]):
+                    continue
+                for cells in rows[1:]:
+                    if len(cells) >= 4:
+                        name = re.sub(r"\\s+", " ", cells[0]).strip()
+                        if name and name.casefold() not in ("name","mutation"):
+                            found.append([name, cells[1] if len(cells)>1 else "—",
+                                          cells[2] if len(cells)>2 else "—",
+                                          cells[3] if len(cells)>3 else "—",
+                                          cells[4] if len(cells)>4 else "—"])
+            if not found:
+                raise RuntimeError("The appraisal odds table could not be parsed.")
+            self.loaded.emit(found, f"Loaded {len(found)} appraisal entries from Fisch Wiki.")
+        except Exception as exc:
+            self.loaded.emit([], f"Appraisal data unavailable: {exc}")
+
 class ImageWorker(QThread):
     loaded = Signal(str, str)
     def __init__(self, rod_name):
@@ -664,6 +697,64 @@ class MainWindow(QMainWindow):
         tl.addWidget(self.capture_template_btn)
         tl.addWidget(self.capture_fish_btn)
         outer.addWidget(template)
+        totems = QGroupBox("Auto totem")
+        tof = QFormLayout(totems)
+        self.auto_totem = QCheckBox("Use a totem automatically between fishing cycles")
+        self.auto_totem.setChecked(bool(self.settings.get("auto_totem", False)))
+        self.totem_select = QComboBox()
+        self.totem_data = [
+            ("Sundial Totem","Advances the day/night cycle","2,000 C$"),
+            ("Tempest Totem","Forces rainy weather","Weather"),
+            ("Windset Totem","Forces windy weather","Weather"),
+            ("Smokescreen Totem","Forces foggy weather","Weather"),
+            ("Meteor Totem","Starts a meteor event","75,000 C$"),
+            ("Avalanche Totem","Starts an avalanche","150,000 C$"),
+            ("Eclipse Totem","Starts an eclipse event","200,000 C$"),
+            ("Blizzard Totem","Starts a blizzard","150,000 C$"),
+            ("Aurora Totem","Starts Aurora Borealis","500,000 C$ (varies)"),
+            ("Cursed Storm Totem","Starts a cursed storm","600,000 C$"),
+            ("Zeus Storm Totem","Starts Zeus's Storm","150,000 C$ (varies)"),
+            ("Poseidon's Wrath Totem","Starts Poseidon's Wrath","150,000 C$ (varies)"),
+            ("Blue Moon Totem","Starts the Blue Moon event","120,000 C$"),
+            ("Mutation Totem","Starts a Mutation Surge","250,000 C$"),
+            ("Shiny Totem","Starts a Shiny Surge","1,250,000 C$ (varies)"),
+            ("Sparkling Totem","Starts Night of the Luminous","1,500,000 C$ (varies)"),
+            ("Starfall Totem","Starts Starfall weather","Drop / event"),
+            ("Megalodon Hunt Totem","Starts a Megalodon hunt","80,000 C$ (varies)"),
+            ("Kraken Hunt Totem","Starts a Kraken hunt","90,000 C$ (varies)"),
+            ("Scylla Hunt Totem","Starts a Scylla hunt","100,000 C$ (varies)"),
+            ("Colossal Dragon Hunt Totem","Starts a Colossal Dragon hunt","90,000 C$ (varies)"),
+            ("Rainbow Totem","Starts Rainbow weather","1,000 S$ (varies)"),
+            ("Clearcast Totem","Forces clear weather","Shop / varies"),
+            ("Brine Storm Totem","Starts a Brine Storm","Limited / varies"),
+            ("Tropical Squall Totem","Forces Tropical Squall weather","800,000 C$"),
+            ("Raging Squall Totem","Forces Raging Squall weather","Quest"),
+            ("Dripstone Collapse Totem","Starts Dripstone Collapse","7,500,000 C$"),
+            ("Bloom Totem","Resets Living Garden flower spawns","Quest / exchange")
+        ]
+        self.totem_select.addItems([x[0] for x in self.totem_data])
+        self.totem_select.setCurrentText(self.settings.get("totem_name", "Sundial Totem"))
+        self.totem_info = QLabel()
+        self.totem_info.setObjectName("muted")
+        self.totem_info.setWordWrap(True)
+        self.totem_select.currentIndexChanged.connect(self.update_totem_info)
+        self.update_totem_info()
+        self.totem_key_input = QLineEdit(str(self.settings.get("totem_key", "3")))
+        self.rod_key_input = QLineEdit(str(self.settings.get("rod_key", "1")))
+        self.totem_interval_input = QSpinBox()
+        self.totem_interval_input.setRange(30, 86400)
+        self.totem_interval_input.setValue(int(self.settings.get("totem_interval", 300)))
+        tof.addRow(self.auto_totem)
+        tof.addRow("Totem metadata", self.totem_select)
+        tof.addRow(self.totem_info)
+        tof.addRow("Totem inventory slot key", self.totem_key_input)
+        tof.addRow("Fishing rod slot key", self.rod_key_input)
+        tof.addRow("Use interval (seconds)", self.totem_interval_input)
+        note = QLabel("Keep Fisch active. Press the global hotkey while Fisch is focused; this does not bypass the game's AFK rules.")
+        note.setObjectName("muted")
+        note.setWordWrap(True)
+        tof.addRow(note)
+        outer.addWidget(totems)
         save = QPushButton("Save settings")
         save.clicked.connect(self.save_settings)
         outer.addWidget(save)
@@ -671,6 +762,50 @@ class MainWindow(QMainWindow):
         scroll.setWidget(inner)
         layout.addWidget(scroll)
         self.tabs.addTab(page, "Settings")
+        self.build_appraisal_data()
+
+    def update_totem_info(self):
+        idx = self.totem_select.currentIndex()
+        if 0 <= idx < len(self.totem_data):
+            name, effect, price = self.totem_data[idx]
+            self.totem_info.setText(f"{effect} · Listed price/source: {price}. Prices and availability may change.")
+
+    def build_appraisal_data(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        intro = QLabel("Appraisal mutation odds and value multipliers. These are chance-based game outcomes; this panel is reference data only.")
+        intro.setObjectName("muted")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.appraisal_table = QTableWidget(0, 5)
+        self.appraisal_table.setHorizontalHeaderLabels(["Mutation","Value","Regular","Appraiser luck","Mutation Surge"])
+        self.appraisal_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        for i in range(1,5):
+            self.appraisal_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        self.appraisal_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.appraisal_table.verticalHeader().setVisible(False)
+        layout.addWidget(self.appraisal_table, 1)
+        refresh = QPushButton("Refresh appraisal data")
+        refresh.clicked.connect(self.refresh_appraisal_data)
+        layout.addWidget(refresh)
+        self.appraisal_status = QLabel("Load the latest appraisal table from Fisch Wiki.")
+        self.appraisal_status.setObjectName("muted")
+        layout.addWidget(self.appraisal_status)
+        self.tabs.addTab(page, "Appraisal data")
+        self.refresh_appraisal_data()
+
+    def refresh_appraisal_data(self):
+        self.appraisal_status.setText("Updating appraisal data…")
+        self.appraisal_worker = AppraisalDataWorker()
+        self.appraisal_worker.loaded.connect(self.appraisal_data_loaded)
+        self.appraisal_worker.start()
+
+    def appraisal_data_loaded(self, rows, message):
+        self.appraisal_status.setText(message)
+        self.appraisal_table.setRowCount(len(rows))
+        for row, values in enumerate(rows):
+            for col, value in enumerate(values[:5]):
+                self.appraisal_table.setItem(row, col, QTableWidgetItem(str(value)))
 
     def spin(self, minimum, maximum, value):
         widget = QSpinBox()
@@ -870,7 +1005,12 @@ class MainWindow(QMainWindow):
             "region_x":self.rx.value(),"region_y":self.ry.value(),"region_w":self.rw.value(),"region_h":self.rh.value(),
             "scan_interval":self.scan_interval.value(),"bite_threshold":self.threshold.value(),
             "reel_click_ms":self.reel_ms.value(),"recast_delay":self.recast_delay.value(),
-            "auto_recast":self.auto_recast.isChecked()
+            "auto_recast":self.auto_recast.isChecked(),
+            "auto_totem":self.auto_totem.isChecked(),
+            "totem_name":self.totem_select.currentText(),
+            "totem_key":self.totem_key_input.text().strip(),
+            "rod_key":self.rod_key_input.text().strip(),
+            "totem_interval":self.totem_interval_input.value()
         })
         save_json(SETTINGS_FILE,self.settings)
         self.register_hotkey()
@@ -935,7 +1075,12 @@ class MainWindow(QMainWindow):
             "region_x":self.rx.value(),"region_y":self.ry.value(),"region_w":self.rw.value(),"region_h":self.rh.value(),
             "scan_interval":self.scan_interval.value(),"bite_threshold":self.threshold.value(),
             "reel_click_ms":self.reel_ms.value(),"recast_delay":self.recast_delay.value(),
-            "auto_recast":self.auto_recast.isChecked()
+            "auto_recast":self.auto_recast.isChecked(),
+            "auto_totem":self.auto_totem.isChecked(),
+            "totem_name":self.totem_select.currentText(),
+            "totem_key":self.totem_key_input.text().strip(),
+            "rod_key":self.rod_key_input.text().strip(),
+            "totem_interval":self.totem_interval_input.value()
         })
         save_json(SETTINGS_FILE,self.settings)
 
