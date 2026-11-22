@@ -1,0 +1,132 @@
+[
+  {
+    "name": "Flimsy Rod",
+    "area": "Moosewood",
+    "luck": "0%",
+    "lure": "0%",
+    "control": "0",
+    "resilience": "0%",
+    "max_weight": "10.4 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Training Rod",
+    "area": "Moosewood",
+    "luck": "-70%",
+    "lure": "10%",
+    "control": "0.2",
+    "resilience": "20%",
+    "max_weight": "9 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Plastic Rod",
+    "area": "Moosewood",
+    "luck": "15%",
+    "lure": "20%",
+    "control": "0",
+    "resilience": "10%",
+    "max_weight": "100 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Carbon Rod",
+    "area": "Moosewood",
+    "luck": "25%",
+    "lure": "15%",
+    "control": "0.05",
+    "resilience": "10%",
+    "max_weight": "600 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Long Rod",
+    "area": "Moosewood",
+    "luck": "80%",
+    "lure": "20%",
+    "control": "-0.1",
+    "resilience": "20%",
+    "max_weight": "250 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Fast Rod",
+    "area": "Moosewood",
+    "luck": "10%",
+    "lure": "70%",
+    "control": "0.05",
+    "resilience": "-5%",
+    "max_weight": "175 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Lucky Rod",
+    "area": "Moosewood",
+    "luck": "177%",
+    "lure": "20%",
+    "control": "0.07",
+    "resilience": "7%",
+    "max_weight": "175 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Fortune Rod",
+    "area": "Roslit Bay",
+    "luck": "200%",
+    "lure": "30%",
+    "control": "0.05",
+    "resilience": "10%",
+    "max_weight": "3,000 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Trident Rod",
+    "area": "Desolate Deep",
+    "luck": "150%",
+    "lure": "35%",
+    "control": "0.05",
+    "resilience": "0%",
+    "max_weight": "6,000 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Destiny Rod",
+    "area": "The Arch",
+    "luck": "250%",
+    "lure": "45%",
+    "control": "0.2",
+    "resilience": "10%",
+    "max_weight": "177,777 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Rod Of The Depths",
+    "area": "The Depths",
+    "luck": "130%",
+    "lure": "75%",
+    "control": "0.15",
+    "resilience": "10%",
+    "max_weight": "30,000 kg",
+    "obtainable": true
+  },
+  {
+    "name": "Fangsplitter",
+    "area": "Underground Music Venue",
+    "luck": "222%",
+    "lure": "222%",
+    "control": "0.22",
+    "resilience": "22%",
+    "max_weight": "∞",
+    "obtainable": true
+  },
+  {
+    "name": "Hammyshork",
+    "area": "Ocean",
+    "luck": "170%",
+    "lure": "70%",
+    "control": "0.15",
+    "resilience": "15%",
+    "max_weight": "∞",
+    "obtainable": true
+  }
+]
