@@ -958,7 +958,7 @@ class MainWindow(QMainWindow):
             self.activity.setText(f"Hotkey unavailable: {exc}")
 
     def toggle_macro(self):
-        if self.worker and self.worker.isRunning():
+        if self.macro_active:
             self.stop_macro()
         else:
             self.start_macro()
@@ -978,9 +978,12 @@ class MainWindow(QMainWindow):
         self.set_macro_status("Starting automation…")
 
     def stop_macro(self):
-        if self.worker and self.worker.isRunning():
+        if self.worker is not None:
             self.worker.stop()
             self.set_macro_status("Stopping…")
+            if not self.worker.isRunning():
+                self.macro_active = False
+                self.macro_stopped()
 
     def macro_stopped(self):
         self.macro_active = False
