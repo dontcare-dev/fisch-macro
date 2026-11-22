@@ -248,7 +248,7 @@ class FishingWorker(QThread):
                         now = time.monotonic()
                         frame = np.array(sct.grab(region))
                         gray = cv2.cvtColor(frame, cv2.COLOR_BGRA2GRAY)
-                        fish_hit = self._match(gray, fish_template, cv2)
+                        fish_hit = self._match(gray, fish_template, cv2, 0.68)
                         if fish_hit is None:
                             if missing_since is None:
                                 missing_since = now
