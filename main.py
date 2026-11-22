@@ -210,6 +210,7 @@ class FishingWorker(QThread):
     def run(self):
         import pyautogui,numpy as np,mss
         held=False
+        next_totem_at=0.0
         try:
             cx,cy=int(self.settings.get("cast_x",0)),int(self.settings.get("cast_y",0))
             if cx<=0 or cy<=0:
@@ -843,9 +844,8 @@ class MainWindow(QMainWindow):
         self.settings.update({
             "hotkey":self.hotkey_input.text().strip().lower() or "f12",
             "cast_x":self.cast_x.value(),"cast_y":self.cast_y.value(),
-            "region_x":self.rx.value(),"region_y":self.ry.value(),"region_w":self.rw.value(),"region_h":self.rh.value(),
-            "scan_interval":self.scan_interval.value(),"bite_threshold":self.threshold.value(),
-            "reel_click_ms":self.reel_ms.value(),"recast_delay":self.recast_delay.value(),
+            "scan_interval":self.scan_interval.value(),"cast_hold":self.cast_hold_input.value(),
+            "recast_delay":self.recast_delay.value(),
             "auto_recast":self.auto_recast.isChecked(),
             "auto_totem":self.auto_totem.isChecked(),
             "totem_name":self.totem_select.currentText(),
