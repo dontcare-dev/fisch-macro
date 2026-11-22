@@ -115,39 +115,6 @@ class CatalogWorker(QThread):
         except Exception as exc:
             self.finished_data.emit([], f"Rod data update unavailable: {exc}")
 
-class AppraisalDataWorker(QThread):
-    loaded = Signal(list, str)
-    def run(self):
-        try:
-            import requests
-            from bs4 import BeautifulSoup
-            url = "https://fisch.wiki/wiki/appraiser/"
-            response = requests.get(url, timeout=25, headers={"User-Agent":"FishMacro/2.0"})
-            response.raise_for_status()
-            soup = BeautifulSoup(response.text, "html.parser")
-            found = []
-            for table in soup.find_all("table"):
-                rows = [[c.get_text(" ", strip=True) for c in tr.find_all(["th","td"])] for tr in table.find_all("tr")]
-                rows = [r for r in rows if r]
-                if not rows:
-                    continue
-                header = " ".join(rows[0]).casefold()
-                if "chance" not in header or not any("mutation" in x.casefold() or "name" in x.casefold() for x in rows[0]):
-                    continue
-                for cells in rows[1:]:
-                    if len(cells) >= 4:
-                        name = re.sub(r"\\s+", " ", cells[0]).strip()
-                        if name and name.casefold() not in ("name","mutation"):
-                            found.append([name, cells[1] if len(cells)>1 else "—",
-                                          cells[2] if len(cells)>2 else "—",
-                                          cells[3] if len(cells)>3 else "—",
-                                          cells[4] if len(cells)>4 else "—"])
-            if not found:
-                raise RuntimeError("The appraisal odds table could not be parsed.")
-            self.loaded.emit(found, f"Loaded {len(found)} appraisal entries from Fisch Wiki.")
-        except Exception as exc:
-            self.loaded.emit([], f"Appraisal data unavailable: {exc}")
-
 class ImageWorker(QThread):
     loaded = Signal(str, str)
     def __init__(self, rod_name):
@@ -762,50 +729,12 @@ class MainWindow(QMainWindow):
         scroll.setWidget(inner)
         layout.addWidget(scroll)
         self.tabs.addTab(page, "Settings")
-        self.build_appraisal_data()
 
     def update_totem_info(self):
         idx = self.totem_select.currentIndex()
         if 0 <= idx < len(self.totem_data):
             name, effect, price = self.totem_data[idx]
             self.totem_info.setText(f"{effect} · Listed price/source: {price}. Prices and availability may change.")
-
-    def build_appraisal_data(self):
-        page = QWidget()
-        layout = QVBoxLayout(page)
-        intro = QLabel("Appraisal mutation odds and value multipliers. These are chance-based game outcomes; this panel is reference data only.")
-        intro.setObjectName("muted")
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
-        self.appraisal_table = QTableWidget(0, 5)
-        self.appraisal_table.setHorizontalHeaderLabels(["Mutation","Value","Regular","Appraiser luck","Mutation Surge"])
-        self.appraisal_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        for i in range(1,5):
-            self.appraisal_table.horizontalHeader().setSectionResizeMode(i, QHeaderView.ResizeToContents)
-        self.appraisal_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.appraisal_table.verticalHeader().setVisible(False)
-        layout.addWidget(self.appraisal_table, 1)
-        refresh = QPushButton("Refresh appraisal data")
-        refresh.clicked.connect(self.refresh_appraisal_data)
-        layout.addWidget(refresh)
-        self.appraisal_status = QLabel("Load the latest appraisal table from Fisch Wiki.")
-        self.appraisal_status.setObjectName("muted")
-        layout.addWidget(self.appraisal_status)
-        self.tabs.addTab(page, "Appraisal data")
-        self.refresh_appraisal_data()
-
-    def refresh_appraisal_data(self):
-        self.appraisal_status.setText("Updating appraisal data…")
-        self.appraisal_worker = AppraisalDataWorker()
-        self.appraisal_worker.loaded.connect(self.appraisal_data_loaded)
-        self.appraisal_worker.start()
-
-    def appraisal_data_loaded(self, rows, message):
-        self.appraisal_status.setText(message)
-        self.appraisal_table.setRowCount(len(rows))
-        for row, values in enumerate(rows):
-            for col, value in enumerate(values[:5]):
-                self.appraisal_table.setItem(row, col, QTableWidgetItem(str(value)))
 
     def spin(self, minimum, maximum, value):
         widget = QSpinBox()
